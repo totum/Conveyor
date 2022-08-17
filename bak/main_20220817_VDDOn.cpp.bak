@@ -1,0 +1,169 @@
+/***
+ * ESP32 + W5500 conveyor module
+ * This firmware is used for different types of conveyor modules
+ * - 24v DC motor based, using KeyesL298 h-bridge (like the mini Festo)
+ * - Older AC shaded pole pairs, turned on/off using relay (single direction only)
+ * Date: August 2022
+ * Author: MOFU
+ * */
+
+
+#include <Arduino.h>
+
+bool g_isKeyesL298 = false;
+
+// Inputs
+#define PIN_POTENTIOMETER       36  // Pin marked VP
+#define PIN_FWD_IN             12  // Pin marked 12
+#define PIN_REV_IN            14  // Pin marked 14
+
+// Outputs
+#define PIN_ENABLE              4   // Marked 4
+#define PIN_FWD_OUT            2  // Marked 2
+#define PIN_REV_OUT           0  // Marked 0
+#define PIN_MOTOR_VDD           15  // Marked 15
+
+#define PIN_RGB_R               25  // Marked 25
+#define PIN_RGB_G               26  // Marked 26
+#define PIN_RGB_B               27  // Marked 27
+
+int g_motorSpeed = 0;
+bool g_isLeft = false;
+bool g_isRight = false;
+
+#define ADC_RESOLUTION           4095 // 12 bits
+#define PWM_CHANNEL             0   // PWM channel 0-15
+#define PWM_FREQ                5000  // PWM Frequency in hz
+#define PWM_RES                 10  // PWM resolution in bits
+const int g_pwmMaxVal = (int)(pow(2, PWM_RES) - 1);
+
+// Timing vars
+unsigned long previousMillis = 0;
+const long computeInterval = 1000;   // In ms
+
+
+void driveStop() {
+  Serial.println("Drive stop");
+  digitalWrite(PIN_MOTOR_VDD, LOW);
+
+  if (g_isKeyesL298) {
+    digitalWrite(PIN_ENABLE, LOW); // Disable
+    digitalWrite(PIN_REV_OUT, LOW);
+    digitalWrite(PIN_FWD_OUT, LOW);
+  } else {
+    // Relay-based - logic is inverted
+    digitalWrite(PIN_FWD_OUT, LOW);
+    digitalWrite(PIN_REV_OUT, LOW);
+  }
+  
+}
+
+void driveFwd() {
+  Serial.println("Drive forward");
+  //if (g_isKeyesL298) {
+    digitalWrite(PIN_REV_OUT, LOW);
+    digitalWrite(PIN_FWD_OUT, HIGH);
+  /*} else {
+    // Relay-based - logic is inverted
+    digitalWrite(PIN_FWD_OUT, LOW);
+    delay(10);
+    digitalWrite(PIN_REV_OUT, HIGH);
+  }*/
+  digitalWrite(PIN_MOTOR_VDD, HIGH);
+}
+
+void driveRev() {
+  Serial.println("Drive reverse");
+  //if (g_isKeyesL298) {
+    digitalWrite(PIN_FWD_OUT, LOW);
+    digitalWrite(PIN_REV_OUT, HIGH);
+  /*} else {
+    // Relay-based - logic is inverted
+    digitalWrite(PIN_REV_OUT, LOW);
+    delay(10);
+    digitalWrite(PIN_FWD_OUT, HIGH);
+  }*/
+  digitalWrite(PIN_MOTOR_VDD, HIGH);
+}
+
+void driveSpeed() {
+  // Get input for motor speed
+  g_motorSpeed = analogRead(PIN_POTENTIOMETER); // Read potentiometer
+  Serial.println(g_motorSpeed);
+  g_motorSpeed = map(g_motorSpeed, 0, ADC_RESOLUTION, 0, g_pwmMaxVal); // Map value to proper PWM range
+  Serial.println(g_motorSpeed);
+  ledcWrite(PIN_ENABLE, g_motorSpeed); // Set speed
+}
+
+void setup() {
+  // Make sure VDD to motor is not enabled
+  pinMode(PIN_MOTOR_VDD,  OUTPUT);
+  digitalWrite(PIN_MOTOR_VDD, LOW);
+
+  // Setup pins
+  pinMode(PIN_FWD_IN, INPUT);
+  pinMode(PIN_REV_IN, INPUT);
+
+  pinMode(PIN_FWD_OUT, OUTPUT);
+  pinMode(PIN_REV_OUT, OUTPUT);
+
+  pinMode(PIN_RGB_R, OUTPUT);
+  pinMode(PIN_RGB_G, OUTPUT);
+  pinMode(PIN_RGB_B, OUTPUT);
+  
+  // If code is used on a conveyor using Keyes L298 driver board (DC motors)
+  if (g_isKeyesL298) {
+    pinMode(PIN_POTENTIOMETER, INPUT);
+    ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RES);
+    ledcAttachPin(PIN_ENABLE, PWM_CHANNEL); // Hook to pin, specify PWM channel as above
+    digitalWrite(PIN_ENABLE, LOW);
+  }
+
+  
+  // Conveyor starts off
+  driveStop();
+  
+  Serial.begin(115200);
+  delay(3000);
+
+}
+
+void loop() {
+  // Only compute if certain time has passed since last compute
+  unsigned long currentMillis = millis();
+
+  // Check for time passed
+  if (currentMillis - previousMillis >= computeInterval) {
+    
+    // Update timing
+    previousMillis = currentMillis;
+    
+    // Now, the rest of the code
+    // Read pins
+    g_isLeft = digitalRead(PIN_FWD_IN);
+    g_isRight = digitalRead(PIN_REV_IN);
+
+    // Conveyor is only enabled and moving if only one of the pins is high. If both are high, assume error  by operator
+    if ( (g_isLeft && !g_isRight) || (g_isRight && !g_isLeft) ) {
+      
+      if (g_isKeyesL298) {
+        driveSpeed();
+      }
+
+      // Determine direction of drive
+      if (g_isLeft) {
+        driveFwd();
+        
+      } else {
+        driveRev();
+      }
+    } else {
+      // Disable; stop
+      driveStop();
+      if (g_isLeft && g_isRight) {
+        Serial.println("Can't do both left and right");
+      }
+    }
+
+  }
+}
